@@ -154,32 +154,52 @@ def list_installed_drivers():
         print(f"Driver information unavailable: {e}")
 
 
-def check_outdated_drivers(years=2):
+def check_outdated_drivers(years: int = 2):
+    """Return a list of drivers/modules older than ``years`` years."""
     print("\n--- POTENTIALLY OUTDATED DRIVERS ---")
     threshold = datetime.now() - timedelta(days=years * 365)
     outdated = []
-    if not IS_WINDOWS or wmi is None:
-        print("Outdated driver check unsupported on this platform.")
-        return outdated
-    try:
-        c = wmi.WMI()
-        for driver in c.Win32_PnPSignedDriver():
-            date_str = str(driver.DriverDate).split('.')[0]
-            try:
-                driver_dt = datetime.strptime(date_str, '%Y%m%d%H%M%S')
-                if driver_dt < threshold:
-                    outdated.append((driver.DeviceName, driver.DriverVersion, driver_dt.date()))
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"Outdated driver check failed: {e}")
-        return outdated
+
+    if IS_WINDOWS and wmi is not None:
+        try:
+            c = wmi.WMI()
+            for driver in c.Win32_PnPSignedDriver():
+                date_str = str(driver.DriverDate).split(".")[0]
+                try:
+                    driver_dt = datetime.strptime(date_str, "%Y%m%d%H%M%S")
+                    if driver_dt < threshold:
+                        outdated.append((driver.DeviceName, driver.DriverVersion, driver_dt.date()))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Outdated driver check failed: {e}")
+            return outdated
+    else:
+        # Attempt a very basic check on Unix-like systems using module timestamps
+        try:
+            output = subprocess.check_output(["lsmod"], universal_newlines=True)
+            modules = [line.split()[0] for line in output.splitlines()[1:] if line]
+            for mod in modules:
+                try:
+                    path = subprocess.check_output(["modinfo", "-F", "filename", mod], universal_newlines=True).strip()
+                    mtime = Path(path).stat().st_mtime
+                    if datetime.fromtimestamp(mtime) < threshold:
+                        ver = subprocess.check_output(["modinfo", "-F", "version", mod], universal_newlines=True).strip()
+                        outdated.append((mod, ver or "unknown", datetime.fromtimestamp(mtime).date()))
+                except Exception:
+                    continue
+        except FileNotFoundError:
+            print("Outdated driver check unsupported: lsmod/modinfo not found")
+            return outdated
+        except Exception as e:
+            print(f"Outdated driver check unsupported on this platform ({e})")
+            return outdated
 
     if outdated:
         for name, ver, dt in outdated:
             print(f"{name} - Version: {ver} - Date: {dt}")
     else:
-        print(f"No drivers older than {years} years detected.")
+        print(f"No drivers/modules older than {years} years detected.")
 
     return outdated
 
@@ -358,6 +378,7 @@ def print_system_health_summary(power_high, outdated, virt_enabled, secure_boot_
     if not issues:
         print("System looks healthy!")
     print("=== END SUMMARY ===")
+    print(f"Total recommendations: {len(recommendations)}")
     return recommendations
 
 
